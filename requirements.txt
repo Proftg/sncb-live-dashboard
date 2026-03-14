@@ -1,0 +1,24 @@
+# Core
+pandas>=2.0
+numpy>=1.24
+
+# Visualization
+plotly>=5.15
+folium>=0.15
+streamlit>=1.30
+
+# API & Data
+requests>=2.31
+gtfs-realtime-bindings>=1.0
+
+# Geo
+geopandas>=0.14
+shapely>=2.0
+
+# Utils
+python-dotenv>=1.0
+tqdm>=4.65
+
+# Notebook
+jupyter>=1.0
+ipykernel>=6.25

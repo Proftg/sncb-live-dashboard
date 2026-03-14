@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (fichiers lourds)
+data/raw/*.zip
+data/raw/*.csv
+data/raw/*.pb
+data/clean/*.csv
+
+# Environment
+.env
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
