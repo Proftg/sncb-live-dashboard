@@ -918,35 +918,38 @@ def create_departure_board(df, station=None, max_rows=15):
 def create_alert_banner(severe_df):
     if severe_df.empty:
         return ""
-
-    alerts_html = '<div style="margin-bottom: 16px;">'
-    alerts_html += '<div class="section-title" style="color: #e74c3c; border-bottom-color: #e74c3c;">🚨 Alertes — Retards Sévères</div>'
-
+    parts = []
+    parts.append('<div style="margin-bottom:16px;">')
+    parts.append(
+        '<div style="color:#e74c3c;font-size:1.1rem;font-weight:600;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #e74c3c;">🚨 Alertes — Retards Sévères</div>'
+    )
     for _, row in severe_df.head(5).iterrows():
-        station = row.get("station", row.get("stop_id", "N/A"))
-        route = row.get("route_id", "N/A")
-        delay = row.get("delay_min", row.get("arrival_delay", 0))
-        trip = row.get("trip_id", "N/A")
-        cause = row.get("delay_cause", "")
-
-        alerts_html += f"""
-        <div class="alert-banner">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <strong style="color: #e74c3c;">{station}</strong>
-                    <span style="color: #8892b0; margin-left: 8px;">{route}</span>
-                    <span style="color: #64ffda; margin-left: 8px;">{trip}</span>
-                </div>
-                <div style="text-align: right;">
-                    <span style="color: #e74c3c; font-weight: 700; font-size: 1.1rem;">+{delay:.0f} min</span>
-                    {f'<span style="color: #8892b0; margin-left: 8px; font-size: 0.8rem;">({cause})</span>' if cause else ""}
-                </div>
-            </div>
-        </div>
-        """
-
-    alerts_html += "</div>"
-    return alerts_html
+        station = str(row.get("station", row.get("stop_id", "N/A")))
+        route = str(row.get("route_id", "N/A"))
+        delay = float(row.get("delay_min", row.get("arrival_delay", 0)))
+        trip = str(row.get("trip_id", "N/A"))
+        cause = str(row.get("delay_cause", ""))
+        cause_span = ""
+        if cause and cause != "nan":
+            cause_span = (
+                '<span style="color:#8892b0;margin-left:8px;font-size:0.8rem;">('
+                + cause
+                + ")</span>"
+            )
+        parts.append(
+            '<div style="background:linear-gradient(90deg,rgba(231,76,60,0.15),rgba(231,76,60,0.05));border:1px solid #e74c3c;border-radius:8px;padding:12px 20px;margin-bottom:8px;">'
+            '<div style="display:flex;justify-content:space-between;align-items:center;">'
+            '<div><strong style="color:#e74c3c;">' + station + "</strong>"
+            '<span style="color:#8892b0;margin-left:8px;">' + route + "</span>"
+            '<span style="color:#64ffda;margin-left:8px;">' + trip + "</span></div>"
+            '<div style="text-align:right;"><span style="color:#e74c3c;font-weight:700;font-size:1.1rem;">+'
+            + str(int(delay))
+            + " min</span>"
+            + cause_span
+            + "</div></div></div>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def create_trend_indicator(current, previous, metric_name):
@@ -1497,7 +1500,28 @@ severe_alerts = historical_df[historical_df["delay_min"] > 15].sort_values(
 )
 
 if not severe_alerts.empty:
-    st.markdown(create_alert_banner(severe_alerts), unsafe_allow_html=True)
+    st.markdown(
+        '<div style="color:#e74c3c;font-size:1.1rem;font-weight:600;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #e74c3c;">🚨 Alertes — Retards Sévères</div>',
+        unsafe_allow_html=True,
+    )
+    for _, row in severe_alerts.head(5).iterrows():
+        station = str(row.get("station", row.get("stop_id", "N/A")))
+        route = str(row.get("route_id", "N/A"))
+        delay = float(row.get("delay_min", row.get("arrival_delay", 0)))
+        trip = str(row.get("trip_id", "N/A"))
+        cause = str(row.get("delay_cause", ""))
+        cause_text = f" ({cause})" if cause and cause != "nan" else ""
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            st.markdown(
+                f"**<span style='color:#e74c3c'>{station}</span>**  {route}  {trip}",
+                unsafe_allow_html=True,
+            )
+        with col_b:
+            st.markdown(
+                f"<span style='color:#e74c3c;font-weight:700;font-size:1.1rem;'>+{int(delay)} min</span>{cause_text}",
+                unsafe_allow_html=True,
+            )
 else:
     st.success("✅ Aucun retard sévère détecté — Réseau opérationnel")
 
