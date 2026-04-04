@@ -137,6 +137,38 @@ CSS = """
         color: #e74c3c;
     }
 
+    .alert-banner {
+        background: linear-gradient(90deg, rgba(231, 76, 60, 0.15), rgba(231, 76, 60, 0.05));
+        border: 1px solid #e74c3c;
+        border-radius: 8px;
+        padding: 12px 20px;
+        margin-bottom: 16px;
+        animation: pulse 2s infinite;
+    }
+
+    .alert-banner.warning {
+        background: linear-gradient(90deg, rgba(243, 156, 18, 0.15), rgba(243, 156, 18, 0.05));
+        border: 1px solid #f39c12;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.85; }
+    }
+
+    .departure-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid #2a2a4a;
+        font-size: 0.85rem;
+    }
+
+    .departure-row:last-child {
+        border-bottom: none;
+    }
+
     div[data-testid="stSidebar"] {
         background: #0f0f1a;
         border-right: 1px solid #2a2a4a;
@@ -208,6 +240,17 @@ DELAY_CATEGORIES = {
     "Severe": {"min": 30, "max": float("inf"), "color": "#e74c3c", "icon": "✗"},
 }
 
+DELAY_CAUSES = [
+    "Signalisation",
+    "Problème technique",
+    "Conditions météo",
+    "Affluence voyageurs",
+    "Travaux infrastructure",
+    "Incident extérieur",
+    "Retard en chaîne",
+    "Autre",
+]
+
 
 def generate_historical_data(days=30):
     np.random.seed(42)
@@ -247,6 +290,7 @@ def generate_historical_data(days=30):
                         "delay_min": round(delay, 1),
                         "arrival_delay": round(delay, 1),
                         "is_canceled": np.random.random() < 0.01,
+                        "delay_cause": np.random.choice(DELAY_CAUSES),
                     }
                 )
 
@@ -557,52 +601,6 @@ def create_station_analysis(df):
     )
     return fig
 
-    station_stats = df.groupby("station").agg(
-        avg_delay=("delay_min", "mean"),
-        total_trains=("delay_min", "count"),
-        on_time_pct=("delay_min", lambda x: (x <= 5).mean() * 100),
-        severe_delays=("delay_min", lambda x: (x > 15).sum()),
-    )
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Bar(
-            x=station_stats["on_time_pct"],
-            y=station_stats.index,
-            name="Ponctualité %",
-            orientation="h",
-            marker_color=station_stats["on_time_pct"].apply(
-                lambda x: "#2ecc71"
-                if x >= 90
-                else ("#f39c12" if x >= 70 else "#e74c3c")
-            ),
-            text=station_stats["on_time_pct"].round(1).astype(str) + "%",
-            textposition="outside",
-            textfont={"color": "#8892b0"},
-        )
-    )
-
-    fig.update_layout(
-        height=400,
-        margin={"l": 150, "r": 50, "t": 30, "b": 50},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#0a0a14",
-        font={"color": "#8892b0"},
-        xaxis={
-            "gridcolor": "#2a2a4a",
-            "title": "Ponctualité %",
-            "title_font": {"color": "#8892b0"},
-            "range": [0, 100],
-        },
-        yaxis={
-            "gridcolor": "#2a2a4a",
-            "title": "",
-            "title_font": {"color": "#8892b0"},
-        },
-    )
-    return fig
-
 
 def create_delay_distribution(df):
     df["category"] = df["delay_min"].apply(get_delay_category)
@@ -676,6 +674,297 @@ def create_map_chart(positions):
         plot_bgcolor="rgba(0,0,0,0)",
     )
     return fig
+
+
+def create_delay_cause_chart(df):
+    if "delay_cause" not in df.columns:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Données de causes non disponibles",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font={"color": "#8892b0", "size": 16},
+        )
+        fig.update_layout(
+            height=350,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="#0a0a14",
+        )
+        return fig
+
+    delayed = df[df["delay_min"] > 5].copy()
+    if delayed.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Aucun retard enregistré",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font={"color": "#8892b0", "size": 16},
+        )
+        fig.update_layout(
+            height=350,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="#0a0a14",
+        )
+        return fig
+
+    cause_counts = delayed["delay_cause"].value_counts()
+    cause_colors = [
+        "#e74c3c",
+        "#e67e22",
+        "#f39c12",
+        "#f1c40f",
+        "#3498db",
+        "#9b59b6",
+        "#1abc9c",
+        "#95a5a6",
+    ]
+
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=cause_counts.values,
+                y=cause_counts.index,
+                orientation="h",
+                marker_color=cause_colors[: len(cause_counts)],
+                text=cause_counts.values,
+                textposition="outside",
+                textfont={"color": "#8892b0"},
+            )
+        ]
+    )
+
+    fig.update_layout(
+        height=350,
+        margin={"l": 180, "r": 50, "t": 30, "b": 50},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#0a0a14",
+        font={"color": "#8892b0"},
+        xaxis={
+            "gridcolor": "#2a2a4a",
+            "title": "Nombre de retards",
+            "title_font": {"color": "#8892b0"},
+        },
+        yaxis={
+            "gridcolor": "#2a2a4a",
+            "title": "",
+            "title_font": {"color": "#8892b0"},
+        },
+    )
+    return fig
+
+
+def create_comparison_chart(df_current, df_previous):
+    metrics = ["Ponctualité %", "Retard moyen (min)", "Retards sévères", "Annulations"]
+
+    if df_current.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Pas de données pour comparaison",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font={"color": "#8892b0", "size": 16},
+        )
+        fig.update_layout(
+            height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0a0a14"
+        )
+        return fig
+
+    current_pct = (
+        (df_current["delay_min"] <= 5).mean() * 100
+        if "delay_min" in df_current.columns
+        else 0
+    )
+    previous_pct = (
+        (df_previous["delay_min"] <= 5).mean() * 100
+        if "delay_min" in df_previous.columns
+        else 0
+    )
+    current_avg = (
+        df_current["delay_min"].mean() if "delay_min" in df_current.columns else 0
+    )
+    previous_avg = (
+        df_previous["delay_min"].mean() if "delay_min" in df_previous.columns else 0
+    )
+    current_severe = (
+        (df_current["delay_min"] > 15).sum() if "delay_min" in df_current.columns else 0
+    )
+    previous_severe = (
+        (df_previous["delay_min"] > 15).sum()
+        if "delay_min" in df_previous.columns
+        else 0
+    )
+    current_cancel = (
+        df_current["is_canceled"].sum() if "is_canceled" in df_current.columns else 0
+    )
+    previous_cancel = (
+        df_previous["is_canceled"].sum() if "is_canceled" in df_previous.columns else 0
+    )
+
+    current_vals = [current_pct, current_avg, current_severe, current_cancel]
+    previous_vals = [previous_pct, previous_avg, previous_severe, previous_cancel]
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=metrics,
+            y=current_vals,
+            name="Période actuelle",
+            marker_color="#64ffda",
+            text=[f"{v:.1f}" for v in current_vals],
+            textposition="outside",
+            textfont={"color": "#64ffda"},
+        )
+    )
+
+    fig.add_trace(
+        go.Bar(
+            x=metrics,
+            y=previous_vals,
+            name="Période précédente",
+            marker_color="#8892b0",
+            text=[f"{v:.1f}" for v in previous_vals],
+            textposition="outside",
+            textfont={"color": "#8892b0"},
+        )
+    )
+
+    fig.update_layout(
+        height=300,
+        margin={"l": 50, "r": 30, "t": 30, "b": 80},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#0a0a14",
+        font={"color": "#8892b0"},
+        barmode="group",
+        xaxis={
+            "gridcolor": "#2a2a4a",
+            "title": "",
+            "title_font": {"color": "#8892b0"},
+            "tickangle": -30,
+        },
+        yaxis={
+            "gridcolor": "#2a2a4a",
+            "title": "",
+            "title_font": {"color": "#8892b0"},
+        },
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+            "font": {"color": "#8892b0"},
+        },
+    )
+    return fig
+
+
+def create_departure_board(df, station=None, max_rows=15):
+    if station and station != "Toutes les gares":
+        board = df[df["station"] == station].copy()
+    else:
+        board = df.copy()
+
+    if board.empty:
+        return pd.DataFrame()
+
+    board = board.sort_values("timestamp", ascending=False).head(max_rows)
+
+    display_cols = []
+    if "timestamp" in board.columns:
+        display_cols.append("timestamp")
+    if "station" in board.columns:
+        display_cols.append("station")
+    elif "stop_id" in board.columns:
+        display_cols.append("stop_id")
+    if "route_id" in board.columns:
+        display_cols.append("route_id")
+    if "trip_id" in board.columns:
+        display_cols.append("trip_id")
+    delay_col = "delay_min" if "delay_min" in board.columns else "arrival_delay"
+    if delay_col in board.columns:
+        display_cols.append(delay_col)
+
+    if not display_cols:
+        return pd.DataFrame()
+
+    result = board[display_cols].copy()
+
+    if "timestamp" in result.columns:
+        result["heure"] = result["timestamp"].apply(
+            lambda x: x.strftime("%H:%M") if hasattr(x, "strftime") else str(x)
+        )
+
+    if delay_col in result.columns:
+        result["statut"] = result[delay_col].apply(
+            lambda x: "✓ À l'heure"
+            if x <= 5
+            else ("⚠ Retard" if x <= 15 else "✗ Sévère")
+        )
+
+    return result
+
+
+def create_alert_banner(severe_df):
+    if severe_df.empty:
+        return ""
+
+    alerts_html = '<div style="margin-bottom: 16px;">'
+    alerts_html += '<div class="section-title" style="color: #e74c3c; border-bottom-color: #e74c3c;">🚨 Alertes — Retards Sévères</div>'
+
+    for _, row in severe_df.head(5).iterrows():
+        station = row.get("station", row.get("stop_id", "N/A"))
+        route = row.get("route_id", "N/A")
+        delay = row.get("delay_min", row.get("arrival_delay", 0))
+        trip = row.get("trip_id", "N/A")
+        cause = row.get("delay_cause", "")
+
+        alerts_html += f"""
+        <div class="alert-banner">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <strong style="color: #e74c3c;">{station}</strong>
+                    <span style="color: #8892b0; margin-left: 8px;">{route}</span>
+                    <span style="color: #64ffda; margin-left: 8px;">{trip}</span>
+                </div>
+                <div style="text-align: right;">
+                    <span style="color: #e74c3c; font-weight: 700; font-size: 1.1rem;">+{delay:.0f} min</span>
+                    {f'<span style="color: #8892b0; margin-left: 8px; font-size: 0.8rem;">({cause})</span>' if cause else ""}
+                </div>
+            </div>
+        </div>
+        """
+
+    alerts_html += "</div>"
+    return alerts_html
+
+
+def create_trend_indicator(current, previous, metric_name):
+    if previous == 0:
+        return "—", "#8892b0"
+    change = ((current - previous) / previous) * 100
+    if metric_name in ["Ponctualité %"]:
+        if change > 0:
+            return f"▲ +{change:.1f}%", "#2ecc71"
+        elif change < 0:
+            return f"▼ {change:.1f}%", "#e74c3c"
+        return "— 0.0%", "#8892b0"
+    else:
+        if change > 0:
+            return f"▲ +{change:.1f}%", "#e74c3c"
+        elif change < 0:
+            return f"▼ {change:.1f}%", "#2ecc71"
+        return "— 0.0%", "#8892b0"
 
 
 @st.cache_data(ttl=0)
@@ -839,6 +1128,14 @@ if (
 ):
     historical_df["delay_min"] = historical_df["arrival_delay"]
 
+if "date" in historical_df.columns:
+    half = len(historical_df) // 2
+    df_current = historical_df.iloc[half:].copy()
+    df_previous = historical_df.iloc[:half].copy()
+else:
+    df_current = historical_df.copy()
+    df_previous = pd.DataFrame()
+
 kpi_calc = KPICalculator(historical_df)
 kpis = kpi_calc.calculate_all()
 
@@ -849,6 +1146,11 @@ severe_count = len(kpis["severe_delays"])
 canceled_count = 0
 if "is_canceled" in historical_df.columns:
     canceled_count = int(historical_df["is_canceled"].sum())
+
+st.markdown(
+    '<div class="section-title">📊 Indicateurs Clés de Performance</div>',
+    unsafe_allow_html=True,
+)
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -902,7 +1204,7 @@ with col4:
     <div class="kpi-card {"success" if severe_count == 0 else "danger"}">
         <div class="kpi-label">Retards sévères</div>
         <div class="kpi-value" style="color: {"#e74c3c" if severe_count > 0 else "#2ecc71"};">{severe_count}</div>
-        <div class="kpi-sub">{"Aucun" if severe_count == 0 else f"> 15 min"}</div>
+        <div class="kpi-sub">{"> 15 min" if severe_count > 0 else "Aucun"}</div>
     </div>
     """,
         unsafe_allow_html=True,
@@ -921,6 +1223,152 @@ with col5:
     )
 
 st.markdown("---")
+
+st.markdown(
+    '<div class="section-title">🎯 Graphiques de Jauge KPI</div>',
+    unsafe_allow_html=True,
+)
+
+g1, g2, g3, g4 = st.columns(4)
+
+with g1:
+    pct_color = (
+        "#2ecc71"
+        if on_time_pct >= 90
+        else ("#f39c12" if on_time_pct >= 70 else "#e74c3c")
+    )
+    st.plotly_chart(
+        create_kpi_gauge(on_time_pct, "Ponctualité", "Objectif: 90%", pct_color),
+        use_container_width=True,
+    )
+
+with g2:
+    delay_color = (
+        "#2ecc71" if avg_delay <= 3 else ("#f39c12" if avg_delay <= 10 else "#e74c3c")
+    )
+    st.plotly_chart(
+        create_kpi_gauge(
+            avg_delay, "Retard moyen", "Objectif: ≤3 min", delay_color, max_val=30
+        ),
+        use_container_width=True,
+    )
+
+with g3:
+    severe_color = "#2ecc71" if severe_count == 0 else "#e74c3c"
+    st.plotly_chart(
+        create_kpi_gauge(
+            severe_count,
+            "Retards sévères",
+            "Seuil: 0",
+            severe_color,
+            max_val=max(severe_count * 2, 10),
+        ),
+        use_container_width=True,
+    )
+
+with g4:
+    cancel_color = "#2ecc71" if canceled_count == 0 else "#e74c3c"
+    st.plotly_chart(
+        create_kpi_gauge(
+            canceled_count,
+            "Annulations",
+            "Seuil: 0",
+            cancel_color,
+            max_val=max(canceled_count * 2, 10),
+        ),
+        use_container_width=True,
+    )
+
+st.markdown("---")
+
+if not df_previous.empty:
+    st.markdown(
+        '<div class="section-title">📈 Comparaison avec la période précédente</div>',
+        unsafe_allow_html=True,
+    )
+
+    prev_on_time = (
+        (df_previous["delay_min"] <= 5).mean() * 100
+        if "delay_min" in df_previous.columns
+        else 0
+    )
+    prev_avg = (
+        df_previous["delay_min"].mean() if "delay_min" in df_previous.columns else 0
+    )
+    prev_severe = (
+        (df_previous["delay_min"] > 15).sum()
+        if "delay_min" in df_previous.columns
+        else 0
+    )
+    prev_cancel = (
+        df_previous["is_canceled"].sum() if "is_canceled" in df_previous.columns else 0
+    )
+
+    trend_pct, trend_pct_color = create_trend_indicator(
+        on_time_pct, prev_on_time, "Ponctualité %"
+    )
+    trend_delay, trend_delay_color = create_trend_indicator(
+        avg_delay, prev_avg, "Retard moyen"
+    )
+    trend_severe, trend_severe_color = create_trend_indicator(
+        severe_count, prev_severe, "Retards sévères"
+    )
+    trend_cancel, trend_cancel_color = create_trend_indicator(
+        canceled_count, prev_cancel, "Annulations"
+    )
+
+    tc1, tc2, tc3, tc4 = st.columns(4)
+    with tc1:
+        st.markdown(
+            f"""
+        <div class="kpi-card info">
+            <div class="kpi-label">Ponctualité</div>
+            <div class="kpi-value" style="font-size: 1.8rem;">{on_time_pct}%</div>
+            <div class="kpi-sub" style="color: {trend_pct_color};">{trend_pct} vs période préc.</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+    with tc2:
+        st.markdown(
+            f"""
+        <div class="kpi-card info">
+            <div class="kpi-label">Retard moyen</div>
+            <div class="kpi-value" style="font-size: 1.8rem;">{avg_delay} min</div>
+            <div class="kpi-sub" style="color: {trend_delay_color};">{trend_delay} vs période préc.</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+    with tc3:
+        st.markdown(
+            f"""
+        <div class="kpi-card info">
+            <div class="kpi-label">Retards sévères</div>
+            <div class="kpi-value" style="font-size: 1.8rem;">{severe_count}</div>
+            <div class="kpi-sub" style="color: {trend_severe_color};">{trend_severe} vs période préc.</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+    with tc4:
+        st.markdown(
+            f"""
+        <div class="kpi-card info">
+            <div class="kpi-label">Annulations</div>
+            <div class="kpi-value" style="font-size: 1.8rem;">{canceled_count}</div>
+            <div class="kpi-sub" style="color: {trend_cancel_color};">{trend_cancel} vs période préc.</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    st.plotly_chart(
+        create_comparison_chart(df_current, df_previous),
+        use_container_width=True,
+    )
+
+    st.markdown("---")
 
 tab1, tab2, tab3, tab4 = st.tabs(
     [
@@ -985,6 +1433,73 @@ with tab4:
         '<div class="section-title">Ponctualité par gare</div>', unsafe_allow_html=True
     )
     st.plotly_chart(create_station_analysis(historical_df), use_container_width=True)
+
+st.markdown("---")
+
+st.markdown(
+    '<div class="section-title">🔍 Analyse des causes de retard</div>',
+    unsafe_allow_html=True,
+)
+st.plotly_chart(create_delay_cause_chart(historical_df), use_container_width=True)
+
+st.markdown("---")
+
+st.markdown(
+    '<div class="section-title">🚉 Tableau de bord des départs</div>',
+    unsafe_allow_html=True,
+)
+
+departure_board = create_departure_board(historical_df, selected_station)
+if not departure_board.empty:
+    board_cols = []
+    if "heure" in departure_board.columns:
+        board_cols.append("heure")
+    if "station" in departure_board.columns:
+        board_cols.append("station")
+    elif "stop_id" in departure_board.columns:
+        board_cols.append("stop_id")
+    if "route_id" in departure_board.columns:
+        board_cols.append("route_id")
+    if "trip_id" in departure_board.columns:
+        board_cols.append("trip_id")
+    delay_col = (
+        "delay_min" if "delay_min" in departure_board.columns else "arrival_delay"
+    )
+    if delay_col in departure_board.columns:
+        board_cols.append(delay_col)
+    if "statut" in departure_board.columns:
+        board_cols.append("statut")
+
+    st.dataframe(
+        departure_board[board_cols],
+        use_container_width=True,
+        height=350,
+        column_config={
+            "heure": st.column_config.TextColumn("Heure"),
+            "station": st.column_config.TextColumn("Gare"),
+            "stop_id": st.column_config.TextColumn("Gare"),
+            "route_id": st.column_config.TextColumn("Ligne"),
+            "trip_id": st.column_config.TextColumn("Train"),
+            "delay_min": st.column_config.NumberColumn("Retard (min)", format="%.1f"),
+            "arrival_delay": st.column_config.NumberColumn(
+                "Retard (min)", format="%.1f"
+            ),
+            "statut": st.column_config.TextColumn("Statut"),
+        },
+    )
+else:
+    st.info("Aucun départ à afficher")
+
+st.markdown("---")
+
+severe_alerts = historical_df[historical_df["delay_min"] > 15].sort_values(
+    "delay_min", ascending=False
+)
+
+if not severe_alerts.empty:
+    st.markdown(create_alert_banner(severe_alerts), unsafe_allow_html=True)
+else:
+    st.success("✅ Aucun retard sévère détecté — Réseau opérationnel")
 
 st.markdown("---")
 
