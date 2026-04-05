@@ -32,3 +32,9 @@ Thumbs.db
 # Notebook exports (generated at runtime)
 notebooks/data/clean/*.csv
 notebooks/data/raw/*.csv
+
+# Ruff cache
+.ruff_cache/
+
+# Plotly iframe exports
+iframe_figures/
