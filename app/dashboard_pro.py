@@ -157,11 +157,11 @@ def _build_positions(trip_updates, stations_df):
         lon = float(station_coords.loc[station, "locationX"])
         lat = float(station_coords.loc[station, "locationY"])
 
-        # Jitter: spread trains around the station in a small circle
+        # Jitter: tiny fixed spread so overlapping points are slightly visible
         count_at_station = station_counts.iloc[idx]
         if count_at_station > 0:
             angle = (count_at_station * 137.508) % 360  # golden angle for even spread
-            radius = 0.008 + 0.003 * (count_at_station // 8)  # ~800m base, grows per ring
+            radius = min(0.0008 + 0.0002 * (count_at_station // 8), 0.003)  # max ~300m cap
             lat += radius * np.cos(np.radians(angle))
             lon += radius * np.sin(np.radians(angle))
 
@@ -217,7 +217,7 @@ def create_kpi_gauge(value, title, subtitle, color, max_val=100):
             "threshold": {"line": {"color": color, "width": 4}, "thickness": 0.75, "value": value},
         },
     ))
-    fig.update_layout(height=220, margin={"l": 20, "r": 20, "t": 50, "b": 10}, **CHART_LAYOUT)
+    fig.update_layout(height=240, margin={"l": 20, "r": 20, "t": 70, "b": 10}, **CHART_LAYOUT)
     return fig
 
 
@@ -422,7 +422,7 @@ st.markdown(f"""
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
     <div>
         <h1 style="margin:0;color:#e6f1ff;font-size:1.8rem;">🚄 SNCB Operations Center</h1>
-        <p style="margin:4px 0 0 0;color:#8892b0;font-size:0.9rem;">Monitoring ponctualite en temps reel — Reseau ferroviaire belge — {len(MAJOR_STATIONS)} gares</p>
+        <p style="margin:4px 0 0 0;color:#8892b0;font-size:0.9rem;">Monitoring ponctualite en temps reel | Reseau ferroviaire belge | {len(MAJOR_STATIONS)} gares</p>
     </div>
     <div style="text-align:right;">
         <div style="color:#64ffda;font-size:0.85rem;font-weight:600;">● LIVE</div>
@@ -486,7 +486,7 @@ prev = st.session_state.prev_kpis
 # ---------------------------------------------------------------------------
 # KPI Cards
 # ---------------------------------------------------------------------------
-st.markdown('<div class="section-title">📊 Indicateurs Cles de Performance — Temps Reel</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">📊 Indicateurs Cles de Performance en Temps Reel</div>', unsafe_allow_html=True)
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -575,7 +575,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Carte Reseau", "📊 Distribution", "
 with tab1:
     st.markdown('<div class="section-title">Position des trains en temps reel</div>', unsafe_allow_html=True)
     if positions is not None and not positions.empty:
-        st.caption(f"{len(positions)} trains affiches sur {positions['station'].nunique()} gares — Les trains sont repartis autour de leur gare de depart")
+        st.caption(f"{len(positions)} trains affiches a leur gare de depart sur {positions['station'].nunique()} gares. Position GPS live non disponible via iRail.")
         map_fig = create_map_chart(positions)
         if map_fig:
             st.plotly_chart(map_fig, use_container_width=True)
@@ -645,7 +645,7 @@ severe_alerts = live_df[live_df["delay_min"] > 15].sort_values("delay_min", asce
 
 if not severe_alerts.empty:
     st.markdown(
-        '<div style="color:#e74c3c;font-size:1.1rem;font-weight:600;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #e74c3c;">🚨 Alertes — Retards Severes</div>',
+        '<div style="color:#e74c3c;font-size:1.1rem;font-weight:600;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #e74c3c;">🚨 Alertes Retards Severes</div>',
         unsafe_allow_html=True,
     )
     for _, row in severe_alerts.head(8).iterrows():
@@ -659,7 +659,7 @@ if not severe_alerts.empty:
         with col_b:
             st.markdown(f"<span style='color:#e74c3c;font-weight:700;font-size:1.1rem;'>+{int(delay)} min</span>", unsafe_allow_html=True)
 else:
-    st.success("✅ Aucun retard severe detecte — Reseau operationnel")
+    st.success("✅ Aucun retard severe detecte. Reseau operationnel")
 
 st.markdown("---")
 
@@ -684,8 +684,8 @@ else:
 # ---------------------------------------------------------------------------
 st.markdown(
     '<div style="text-align:center;color:#8892b0;font-size:0.8rem;padding:20px 0;">'
-    f"SNCB Operations Center — Dashboard Temps Reel — Tahar Guenfoud — "
-    f'Donnees: iRail API — {datetime.now().strftime("%d/%m/%Y %H:%M:%S")} — '
+    f"SNCB Operations Center | Dashboard Temps Reel | Tahar Guenfoud | "
+    f'Donnees: iRail API | {datetime.now().strftime("%d/%m/%Y %H:%M:%S")} | '
     f'Refresh #{st.session_state.refresh_count}'
     "</div>",
     unsafe_allow_html=True,
