@@ -20,7 +20,16 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# CSS — compact dark theme
+# Auto-refresh: use streamlit-autorefresh if available, fallback to fragment
+# ---------------------------------------------------------------------------
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
+
+# ---------------------------------------------------------------------------
+# CSS
 # ---------------------------------------------------------------------------
 CSS = """
 <style>
@@ -65,8 +74,8 @@ MAJOR_STATIONS = [
     "Gent-Sint-Pieters", "Antwerpen-Centraal", "Liege-Guillemins",
     "Charleroi-Central", "Bruges", "Leuven", "Namur",
     "Mons", "Mechelen", "Hasselt", "Kortrijk", "Ostend",
-    "Ottignies", "Denderleeuw", "Schaerbeek", "Jemeppe-sur-Meuse",
-    "Liege-Saint-Lambert",
+    "Ottignies", "Denderleeuw", "Schaerbeek",
+    "Liege-Saint-Lambert", "Arlon",
 ]
 
 DELAY_CATEGORIES = {
@@ -90,21 +99,19 @@ def get_delay_category(delay):
 
 
 # ---------------------------------------------------------------------------
-# Data fetching — real-time from iRail API
+# Data fetching
 # ---------------------------------------------------------------------------
 @st.cache_resource
 def get_api():
     return RealtimeAPI()
 
 
-@st.cache_data(ttl=45)
-def fetch_live_data(_api):
+def fetch_live_data(api_instance):
     """Fetch liveboards for all major stations in parallel + station coords."""
-    combined = _api.get_liveboards_parallel(MAJOR_STATIONS)
+    combined = api_instance.get_liveboards_parallel(MAJOR_STATIONS)
     if combined.empty:
         return None, None, None
 
-    # Build trip_updates from liveboard data
     trip_updates = pd.DataFrame({
         "trip_id": combined["vehicle"],
         "route_id": combined.get("vehicle_shortname", pd.Series(["IC"] * len(combined))),
@@ -117,45 +124,47 @@ def fetch_live_data(_api):
         "scheduled_datetime": combined.get("scheduled_datetime", pd.NaT),
     })
     trip_updates = trip_updates.dropna(subset=["arrival_delay"])
-    trip_updates["timestamp"] = datetime.now()
-    trip_updates["date"] = datetime.now().date()
-    trip_updates["hour"] = datetime.now().hour
+    now = datetime.now()
+    trip_updates["timestamp"] = now
+    trip_updates["date"] = now.date()
+    trip_updates["hour"] = now.hour
     trip_updates["station"] = trip_updates["stop_id"]
     trip_updates["is_canceled"] = trip_updates["canceled"].astype(str).isin(["1", "True"])
     trip_updates["delay_min"] = trip_updates["arrival_delay"]
 
-    # Build positions from station coordinates (real coords, no random)
-    stations_df = _api.get_stations()
+    stations_df = api_instance.get_stations()
     positions = _build_positions(trip_updates, stations_df)
-
-    # Fetch real disturbances
-    disturbances = _api.get_disturbances()
+    disturbances = api_instance.get_disturbances()
 
     return trip_updates, positions, disturbances
 
 
-@st.cache_data(ttl=45)
-def fetch_gtfs_rt_data(_api):
-    """Try GTFS-RT Protobuf feeds for real vehicle positions."""
-    vp = _api.vehicle_positions_to_df()
-    tu = _api.trip_updates_to_df()
-    return tu, vp
-
-
 def _build_positions(trip_updates, stations_df):
-    """Map trains to real station coordinates."""
+    """Map trains to real station coordinates with jitter to avoid overlap."""
     if stations_df.empty or trip_updates.empty:
         return pd.DataFrame()
 
     station_coords = stations_df.set_index("name")[["locationX", "locationY"]]
+
+    # Count trains per station for jitter spread
+    station_counts = trip_updates.groupby("stop_id").cumcount()
+
     positions = []
-    for _, row in trip_updates.iterrows():
+    for idx, (_, row) in enumerate(trip_updates.iterrows()):
         station = row["stop_id"]
-        if station in station_coords.index:
-            lon = float(station_coords.loc[station, "locationX"])
-            lat = float(station_coords.loc[station, "locationY"])
-        else:
-            continue  # skip unknown stations — no fake coordinates
+        if station not in station_coords.index:
+            continue
+        lon = float(station_coords.loc[station, "locationX"])
+        lat = float(station_coords.loc[station, "locationY"])
+
+        # Jitter: spread trains around the station in a small circle
+        count_at_station = station_counts.iloc[idx]
+        if count_at_station > 0:
+            angle = (count_at_station * 137.508) % 360  # golden angle for even spread
+            radius = 0.008 + 0.003 * (count_at_station // 8)  # ~800m base, grows per ring
+            lat += radius * np.cos(np.radians(angle))
+            lon += radius * np.sin(np.radians(angle))
+
         positions.append({
             "trip_id": row["trip_id"],
             "route_id": row["route_id"],
@@ -167,6 +176,17 @@ def _build_positions(trip_updates, stations_df):
             "station": station,
         })
     return pd.DataFrame(positions)
+
+
+# ---------------------------------------------------------------------------
+# Session state: accumulate history for trends
+# ---------------------------------------------------------------------------
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "prev_kpis" not in st.session_state:
+    st.session_state.prev_kpis = None
+if "refresh_count" not in st.session_state:
+    st.session_state.refresh_count = 0
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +228,7 @@ def create_delay_distribution(df):
     colors = [DELAY_CATEGORIES[cat]["color"] for cat in dist.index if cat in DELAY_CATEGORIES]
     fig = go.Figure(data=[go.Pie(
         labels=dist.index, values=dist.values, hole=0.5,
-        marker_colors=colors,
-        textinfo="label+percent",
+        marker_colors=colors, textinfo="label+percent",
         textfont={"color": "#e6f1ff", "size": 12},
     )])
     fig.update_layout(height=350, margin={"l": 20, "r": 20, "t": 30, "b": 20}, **CHART_LAYOUT,
@@ -269,23 +288,64 @@ def create_map_chart(positions):
     if df.empty:
         return None
     df["delay_cat"] = df["departure_delay"].apply(get_delay_category)
-    df["size"] = df["departure_delay"].clip(lower=1)
+    df["marker_size"] = df["departure_delay"].clip(lower=2, upper=40)
+    df["hover_label"] = df.apply(
+        lambda r: f"{r['route_id']} | {r['station']} → {r['destination']} | +{r['departure_delay']:.0f}min", axis=1
+    )
+
     fig = px.scatter_map(
         df, lat="latitude", lon="longitude", color="delay_cat",
         color_discrete_map={"On-time": "#2ecc71", "Minor": "#f39c12", "Major": "#e67e22", "Severe": "#e74c3c"},
-        hover_name="trip_id",
-        hover_data={"departure_delay": True, "route_id": True, "station": True, "destination": True},
-        size="size", size_max=15, zoom=7.5,
+        category_orders={"delay_cat": ["On-time", "Minor", "Major", "Severe"]},
+        hover_name="hover_label",
+        hover_data={"delay_cat": False, "latitude": False, "longitude": False, "marker_size": False,
+                    "departure_delay": ":.1f", "route_id": True, "station": True, "destination": True},
+        size="marker_size", size_max=18, zoom=7,
         center={"lat": 50.5, "lon": 4.35},
     )
-    fig.update_layout(map_style="carto-darkmatter", margin={"l": 0, "r": 0, "t": 0, "b": 0}, height=550, **CHART_LAYOUT)
+    fig.update_layout(
+        map_style="carto-darkmatter",
+        margin={"l": 0, "r": 0, "t": 0, "b": 0}, height=550,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(title="Statut", orientation="v", yanchor="top", y=0.98, xanchor="left", x=0.01,
+                    bgcolor="rgba(26,26,46,0.8)", font=dict(color="#e6f1ff")),
+    )
+    return fig
+
+
+def create_history_chart(history):
+    """Line chart of KPI evolution over time from accumulated snapshots."""
+    if len(history) < 2:
+        return None
+    df = pd.DataFrame(history)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["on_time_pct"], name="Ponctualite %",
+        line=dict(color="#2ecc71", width=2), fill="tozeroy", fillcolor="rgba(46,204,113,0.1)",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["avg_delay"], name="Retard moyen (min)",
+        line=dict(color="#f39c12", width=2, dash="dash"), yaxis="y2",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["total_trains"], name="Trains surveilles",
+        line=dict(color="#3498db", width=1, dash="dot"), yaxis="y2",
+    ))
+    fig.update_layout(
+        height=300, **CHART_LAYOUT,
+        margin=dict(l=50, r=50, t=10, b=30),
+        xaxis=dict(gridcolor="#2a2a4a"),
+        yaxis=dict(gridcolor="#2a2a4a", title="Ponctualite %", range=[0, 100]),
+        yaxis2=dict(overlaying="y", side="right", gridcolor="rgba(0,0,0,0)", title="Retard / Trains"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="#8892b0")),
+    )
     return fig
 
 
 def create_trend_indicator(current, previous, metric_name):
-    if previous == 0:
+    if previous is None or previous == 0:
         return "—", "#8892b0"
-    change = ((current - previous) / previous) * 100
+    change = ((current - previous) / abs(previous)) * 100
     if metric_name in ["Ponctualite %"]:
         if change > 0:
             return f"▲ +{change:.1f}%", "#2ecc71"
@@ -321,48 +381,38 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Real API health check
-    health = api.check_api_health()
-    irail_dot = "🟢" if health["irail"] else "🔴"
-    gtfsrt_dot = "🟢" if health["gtfs_rt"] else "🔴"
+    # Real API health check (cached briefly)
+    @st.cache_data(ttl=30)
+    def _check_health():
+        return get_api().check_api_health()
+
+    health = _check_health()
+    irail_dot = "🟢 Connecte" if health["irail"] else "🔴 Deconnecte"
     st.markdown(f"""
     <div style="color:#8892b0;font-size:0.8rem;">
         <div style="margin-bottom:8px;">📡 Statut API</div>
-        <div>{irail_dot} iRail API</div>
-        <div>{gtfsrt_dot} GTFS-RT Feed</div>
+        <div>{irail_dot}</div>
         <div style="margin-top:12px;">🕐 Derniere MAJ</div>
         <div style="color:#e6f1ff;">{datetime.now().strftime("%H:%M:%S")}</div>
-        <div style="margin-top:8px;color:#64ffda;font-size:0.7rem;">↻ Auto-refresh: {refresh_label}</div>
+        <div style="margin-top:4px;color:#64ffda;font-size:0.7rem;">↻ Auto-refresh: {refresh_label}</div>
+        <div style="color:#8892b0;font-size:0.65rem;margin-top:2px;">Snapshots: {len(st.session_state.history)}</div>
     </div>
     """, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
-# Auto-refresh logic
+# Auto-refresh
 # ---------------------------------------------------------------------------
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = datetime.now()
-
-# Use st.empty + rerun pattern for auto-refresh
-time_since_refresh = (datetime.now() - st.session_state.last_refresh).total_seconds()
-if time_since_refresh >= refresh_sec:
-    st.session_state.last_refresh = datetime.now()
-    st.cache_data.clear()
-    st.rerun()
-
-# Countdown display
-remaining = max(0, int(refresh_sec - time_since_refresh))
-
-# JavaScript auto-rerun timer
-st.markdown(f"""
-<script>
-    setTimeout(function() {{
-        window.parent.document.querySelectorAll('button[kind="header"]').forEach(b => {{
-            if (b.innerText.includes('Rerun')) b.click();
-        }});
-    }}, {remaining * 1000});
-</script>
-""", unsafe_allow_html=True)
+if HAS_AUTOREFRESH:
+    st_autorefresh(interval=refresh_sec * 1000, key="auto_refresh")
+else:
+    # Fallback: manual rerun timer
+    if "last_refresh" not in st.session_state:
+        st.session_state.last_refresh = datetime.now()
+    elapsed = (datetime.now() - st.session_state.last_refresh).total_seconds()
+    if elapsed >= refresh_sec:
+        st.session_state.last_refresh = datetime.now()
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -372,12 +422,11 @@ st.markdown(f"""
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
     <div>
         <h1 style="margin:0;color:#e6f1ff;font-size:1.8rem;">🚄 SNCB Operations Center</h1>
-        <p style="margin:4px 0 0 0;color:#8892b0;font-size:0.9rem;">Monitoring ponctualite en temps reel — Reseau ferroviaire belge</p>
+        <p style="margin:4px 0 0 0;color:#8892b0;font-size:0.9rem;">Monitoring ponctualite en temps reel — Reseau ferroviaire belge — {len(MAJOR_STATIONS)} gares</p>
     </div>
     <div style="text-align:right;">
         <div style="color:#64ffda;font-size:0.85rem;font-weight:600;">● LIVE</div>
         <div style="color:#8892b0;font-size:0.75rem;">{datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</div>
-        <div style="color:#8892b0;font-size:0.65rem;">Prochain refresh dans {remaining}s</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -388,41 +437,55 @@ st.markdown(f"""
 with st.spinner("Chargement des donnees en temps reel..."):
     trip_updates, positions, disturbances = fetch_live_data(api)
 
-# Also try GTFS-RT for real vehicle positions
-gtfs_tu, gtfs_vp = fetch_gtfs_rt_data(api)
-if gtfs_vp is not None and not gtfs_vp.empty:
-    # Merge GTFS-RT real positions with iRail delay data
-    positions = gtfs_vp.copy()
-    if "departure_delay" not in positions.columns:
-        positions["departure_delay"] = 0
-    if "arrival_delay" not in positions.columns:
-        positions["arrival_delay"] = 0
-
 if trip_updates is None or trip_updates.empty:
-    st.error("⚠ API iRail indisponible — Impossible de charger les donnees en temps reel. Verifiez votre connexion.")
+    st.error("⚠ API iRail indisponible — Verifiez votre connexion internet.")
     st.stop()
 
 # Apply station filter
-historical_df = trip_updates.copy()
-if selected_station != "Toutes les gares" and "station" in historical_df.columns:
-    historical_df = historical_df[historical_df["station"] == selected_station]
+live_df = trip_updates.copy()
+if selected_station != "Toutes les gares" and "station" in live_df.columns:
+    live_df = live_df[live_df["station"] == selected_station]
 
-if historical_df.empty:
-    st.warning(f"Aucune donnee pour {selected_station}. Essayez une autre gare.")
+if live_df.empty:
+    st.warning(f"Aucune donnee pour {selected_station}.")
     st.stop()
 
 # ---------------------------------------------------------------------------
-# KPIs
+# KPIs + history accumulation
 # ---------------------------------------------------------------------------
-kpi_calc = KPICalculator(historical_df)
+kpi_calc = KPICalculator(live_df)
 kpis = kpi_calc.calculate_all()
 
 total_trains = kpis["total_trains"]
 on_time_pct = kpis["on_time_percentage"]
 avg_delay = kpis["average_delay"]
 severe_count = len(kpis["severe_delays"])
-canceled_count = int(historical_df["is_canceled"].sum()) if "is_canceled" in historical_df.columns else 0
+canceled_count = int(live_df["is_canceled"].sum()) if "is_canceled" in live_df.columns else 0
 
+# Save snapshot to history (max 120 entries = ~2h at 60s intervals)
+now = datetime.now()
+snapshot = {
+    "timestamp": now,
+    "total_trains": total_trains,
+    "on_time_pct": on_time_pct,
+    "avg_delay": avg_delay,
+    "severe_count": severe_count,
+    "canceled_count": canceled_count,
+}
+# Only add if enough time has passed since last snapshot
+if (not st.session_state.history or
+        (now - st.session_state.history[-1]["timestamp"]).total_seconds() >= 25):
+    st.session_state.prev_kpis = st.session_state.history[-1] if st.session_state.history else None
+    st.session_state.history.append(snapshot)
+    if len(st.session_state.history) > 120:
+        st.session_state.history = st.session_state.history[-120:]
+    st.session_state.refresh_count += 1
+
+prev = st.session_state.prev_kpis
+
+# ---------------------------------------------------------------------------
+# KPI Cards
+# ---------------------------------------------------------------------------
 st.markdown('<div class="section-title">📊 Indicateurs Cles de Performance — Temps Reel</div>', unsafe_allow_html=True)
 
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -432,27 +495,29 @@ with col1:
     <div class="kpi-card info">
         <div class="kpi-label">Trains surveilles</div>
         <div class="kpi-value">{total_trains:,}</div>
-        <div class="kpi-sub">Temps reel</div>
+        <div class="kpi-sub">{len(MAJOR_STATIONS)} gares</div>
     </div>""", unsafe_allow_html=True)
 
 with col2:
     color = "#2ecc71" if on_time_pct >= 90 else ("#f39c12" if on_time_pct >= 70 else "#e74c3c")
     css_cls = "success" if on_time_pct >= 90 else ("warning" if on_time_pct >= 70 else "danger")
+    trend_txt, trend_col = create_trend_indicator(on_time_pct, prev["on_time_pct"] if prev else None, "Ponctualite %")
     st.markdown(f"""
     <div class="kpi-card {css_cls}">
         <div class="kpi-label">Ponctualite</div>
         <div class="kpi-value" style="color:{color};">{on_time_pct}%</div>
-        <div class="kpi-sub">Objectif: 90%</div>
+        <div class="kpi-sub" style="color:{trend_col};">{trend_txt}</div>
     </div>""", unsafe_allow_html=True)
 
 with col3:
     color = "#2ecc71" if avg_delay <= 3 else ("#f39c12" if avg_delay <= 10 else "#e74c3c")
     css_cls = "success" if avg_delay <= 3 else ("warning" if avg_delay <= 10 else "danger")
+    trend_txt, trend_col = create_trend_indicator(avg_delay, prev["avg_delay"] if prev else None, "Retard")
     st.markdown(f"""
     <div class="kpi-card {css_cls}">
         <div class="kpi-label">Retard moyen</div>
         <div class="kpi-value" style="color:{color};">{avg_delay} min</div>
-        <div class="kpi-sub">Mediane: {kpis["median_delay"]} min</div>
+        <div class="kpi-sub" style="color:{trend_col};">{trend_txt}</div>
     </div>""", unsafe_allow_html=True)
 
 with col4:
@@ -484,13 +549,23 @@ with g1:
     st.plotly_chart(create_kpi_gauge(on_time_pct, "Ponctualite", "Objectif: 90%", pct_color), use_container_width=True)
 with g2:
     delay_color = "#2ecc71" if avg_delay <= 3 else ("#f39c12" if avg_delay <= 10 else "#e74c3c")
-    st.plotly_chart(create_kpi_gauge(avg_delay, "Retard moyen", "Objectif: ≤3 min", delay_color, max_val=30), use_container_width=True)
+    st.plotly_chart(create_kpi_gauge(avg_delay, "Retard moyen", "Obj: 3 min", delay_color, max_val=30), use_container_width=True)
 with g3:
     st.plotly_chart(create_kpi_gauge(severe_count, "Retards severes", "Seuil: 0", "#2ecc71" if severe_count == 0 else "#e74c3c", max_val=max(severe_count * 2, 10)), use_container_width=True)
 with g4:
     st.plotly_chart(create_kpi_gauge(canceled_count, "Annulations", "Seuil: 0", "#2ecc71" if canceled_count == 0 else "#e74c3c", max_val=max(canceled_count * 2, 10)), use_container_width=True)
 
 st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# Evolution chart (from accumulated history)
+# ---------------------------------------------------------------------------
+if len(st.session_state.history) >= 2:
+    st.markdown('<div class="section-title">📈 Evolution en temps reel (depuis le lancement)</div>', unsafe_allow_html=True)
+    history_fig = create_history_chart(st.session_state.history)
+    if history_fig:
+        st.plotly_chart(history_fig, use_container_width=True)
+    st.markdown("---")
 
 # ---------------------------------------------------------------------------
 # Tabs
@@ -500,37 +575,36 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Carte Reseau", "📊 Distribution", "
 with tab1:
     st.markdown('<div class="section-title">Position des trains en temps reel</div>', unsafe_allow_html=True)
     if positions is not None and not positions.empty:
+        st.caption(f"{len(positions)} trains affiches sur {positions['station'].nunique()} gares — Les trains sont repartis autour de leur gare de depart")
         map_fig = create_map_chart(positions)
         if map_fig:
             st.plotly_chart(map_fig, use_container_width=True)
-        else:
-            st.info("Aucune position geographique disponible")
     else:
-        st.info("Aucune position disponible — les donnees GTFS-RT ne sont peut-etre pas accessibles")
+        st.info("Aucune position disponible")
 
 with tab2:
     st.markdown('<div class="section-title">Distribution des retards</div>', unsafe_allow_html=True)
-    st.plotly_chart(create_delay_distribution(historical_df), use_container_width=True)
+    st.plotly_chart(create_delay_distribution(live_df), use_container_width=True)
 
 with tab3:
     st.markdown('<div class="section-title">Performance par ligne</div>', unsafe_allow_html=True)
-    st.plotly_chart(create_route_analysis(historical_df), use_container_width=True)
+    st.plotly_chart(create_route_analysis(live_df), use_container_width=True)
 
 with tab4:
     st.markdown('<div class="section-title">Ponctualite par gare</div>', unsafe_allow_html=True)
-    st.plotly_chart(create_station_analysis(historical_df), use_container_width=True)
+    st.plotly_chart(create_station_analysis(live_df), use_container_width=True)
 
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Departure board (real data)
+# Departure board
 # ---------------------------------------------------------------------------
 st.markdown('<div class="section-title">🚉 Tableau des departs en temps reel</div>', unsafe_allow_html=True)
 
-board = historical_df.copy()
+board = live_df.copy()
 if "scheduled_datetime" in board.columns:
     board = board.sort_values("scheduled_datetime", ascending=False)
-board = board.head(20)
+board = board.head(25)
 
 display_cols = []
 if "scheduled_datetime" in board.columns:
@@ -538,14 +612,9 @@ if "scheduled_datetime" in board.columns:
         lambda x: x.strftime("%H:%M") if pd.notna(x) and hasattr(x, "strftime") else "—"
     )
     display_cols.append("heure")
-if "station" in board.columns:
-    display_cols.append("station")
-if "destination" in board.columns:
-    display_cols.append("destination")
-if "route_id" in board.columns:
-    display_cols.append("route_id")
-if "platform" in board.columns:
-    display_cols.append("platform")
+for c in ["station", "destination", "route_id", "platform"]:
+    if c in board.columns:
+        display_cols.append(c)
 if "delay_min" in board.columns:
     display_cols.append("delay_min")
     board["statut"] = board["delay_min"].apply(
@@ -555,7 +624,7 @@ if "delay_min" in board.columns:
 
 if display_cols:
     st.dataframe(
-        board[display_cols], use_container_width=True, height=400,
+        board[display_cols], use_container_width=True, height=450,
         column_config={
             "heure": st.column_config.TextColumn("Heure"),
             "station": st.column_config.TextColumn("Gare"),
@@ -566,15 +635,13 @@ if display_cols:
             "statut": st.column_config.TextColumn("Statut"),
         },
     )
-else:
-    st.info("Aucun depart a afficher")
 
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
 # Severe alerts
 # ---------------------------------------------------------------------------
-severe_alerts = historical_df[historical_df["delay_min"] > 15].sort_values("delay_min", ascending=False)
+severe_alerts = live_df[live_df["delay_min"] > 15].sort_values("delay_min", ascending=False)
 
 if not severe_alerts.empty:
     st.markdown(
@@ -597,14 +664,14 @@ else:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Real disturbances from iRail API
+# Real disturbances
 # ---------------------------------------------------------------------------
 st.markdown('<div class="section-title">⚠ Perturbations en cours (iRail)</div>', unsafe_allow_html=True)
 
 if disturbances is not None and not disturbances.empty:
     for _, row in disturbances.head(10).iterrows():
         title = str(row.get("title", ""))
-        desc = str(row.get("description", ""))[:200]
+        desc = str(row.get("description", ""))[:300]
         st.markdown(f"**{title}**")
         if desc and desc != "nan":
             st.caption(desc)
@@ -617,8 +684,9 @@ else:
 # ---------------------------------------------------------------------------
 st.markdown(
     '<div style="text-align:center;color:#8892b0;font-size:0.8rem;padding:20px 0;">'
-    "SNCB Operations Center — Dashboard Temps Reel — Tahar Guenfoud — "
-    f'Donnees: iRail API — {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}'
+    f"SNCB Operations Center — Dashboard Temps Reel — Tahar Guenfoud — "
+    f'Donnees: iRail API — {datetime.now().strftime("%d/%m/%Y %H:%M:%S")} — '
+    f'Refresh #{st.session_state.refresh_count}'
     "</div>",
     unsafe_allow_html=True,
 )

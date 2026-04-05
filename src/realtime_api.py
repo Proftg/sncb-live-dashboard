@@ -65,17 +65,12 @@ class RealtimeAPI:
             return None
 
     def check_api_health(self) -> dict:
-        status = {"irail": False, "gtfs_rt": False, "timestamp": datetime.now()}
+        status = {"irail": False, "timestamp": datetime.now()}
         try:
             resp = requests.get(
                 IRAIL_STATIONS_URL, headers=self.headers, timeout=5
             )
             status["irail"] = resp.status_code == 200
-        except Exception:
-            pass
-        try:
-            resp = requests.head(GTFS_RT_VEHICLE_POSITIONS_URL, timeout=5)
-            status["gtfs_rt"] = resp.status_code == 200
         except Exception:
             pass
         return status
