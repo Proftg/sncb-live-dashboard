@@ -118,11 +118,19 @@ class KPICalculator:
     def trend_last_hour(self) -> dict:
         if self.trip_updates_df is None or self.trip_updates_df.empty:
             return {"current": 0.0, "previous": 0.0, "change": 0.0}
-        return {
-            "current": self.on_time_percentage(),
-            "previous": 0.0,
-            "change": 0.0,
-        }
+        df = self.trip_updates_df.dropna(subset=["arrival_delay"])
+        if "timestamp" not in df.columns:
+            current_pct = self.on_time_percentage()
+            return {"current": current_pct, "previous": current_pct, "change": 0.0}
+        now = df["timestamp"].max()
+        one_hour_ago = now - timedelta(hours=1)
+        two_hours_ago = now - timedelta(hours=2)
+        current_df = df[df["timestamp"] >= one_hour_ago]
+        previous_df = df[(df["timestamp"] >= two_hours_ago) & (df["timestamp"] < one_hour_ago)]
+        current_pct = round((current_df["arrival_delay"].abs() <= 5).mean() * 100, 1) if len(current_df) > 0 else 0.0
+        previous_pct = round((previous_df["arrival_delay"].abs() <= 5).mean() * 100, 1) if len(previous_df) > 0 else 0.0
+        change = round(current_pct - previous_pct, 1) if previous_pct > 0 else 0.0
+        return {"current": current_pct, "previous": previous_pct, "change": change}
 
     def _empty_kpis(self) -> dict:
         return {
