@@ -1,16 +1,38 @@
 import os
 import requests
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    from google.transit import gtfs_realtime_pb2
+
+    HAS_GTFS_RT = True
+except ImportError:
+    HAS_GTFS_RT = False
 
 
-IRAIR_API_BASE = "https://api.irail.be"
-IRAIR_STATIONS_URL = f"{IRAIR_API_BASE}/stations/?format=json"
-IRAIR_LIVEBOARD_URL = f"{IRAIR_API_BASE}/liveboard/"
-IRAIR_CONNECTIONS_URL = f"{IRAIR_API_BASE}/connections/"
-IRAIR_VEHICLE_URL = f"{IRAIR_API_BASE}/vehicle/"
-IRAIR_DISTURBANCES_URL = f"{IRAIR_API_BASE}/disturbances/?format=json"
+IRAIL_API_BASE = "https://api.irail.be"
+IRAIL_STATIONS_URL = f"{IRAIL_API_BASE}/stations/?format=json"
+IRAIL_LIVEBOARD_URL = f"{IRAIL_API_BASE}/liveboard/"
+IRAIL_CONNECTIONS_URL = f"{IRAIL_API_BASE}/connections/"
+IRAIL_VEHICLE_URL = f"{IRAIL_API_BASE}/vehicle/"
+IRAIL_DISTURBANCES_URL = f"{IRAIL_API_BASE}/disturbances/?format=json"
+
+GTFS_RT_TRIP_UPDATES_URL = os.getenv(
+    "GTFS_RT_TRIP_UPDATES_URL",
+    "https://gtfs.irail.be/nmbs/gtfs-rt/tripUpdates.pb",
+)
+GTFS_RT_VEHICLE_POSITIONS_URL = os.getenv(
+    "GTFS_RT_VEHICLE_POSITIONS_URL",
+    "https://gtfs.irail.be/nmbs/gtfs-rt/vehiclePositions.pb",
+)
+GTFS_RT_ALERTS_URL = os.getenv(
+    "GTFS_RT_ALERTS_URL",
+    "https://gtfs.irail.be/nmbs/gtfs-rt/alerts.pb",
+)
 
 
 class RealtimeAPI:
@@ -20,20 +42,48 @@ class RealtimeAPI:
             "Accept": "application/json",
         }
         self._stations_cache = None
+        self._last_api_status = None
 
     def _get(self, url: str, params: Optional[dict] = None) -> Optional[dict]:
         try:
-            resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+            resp = requests.get(url, headers=self.headers, params=params, timeout=15)
             resp.raise_for_status()
+            self._last_api_status = True
             return resp.json()
         except Exception as e:
+            self._last_api_status = False
             print(f"Error fetching {url}: {e}")
             return None
+
+    def _get_protobuf(self, url: str) -> Optional[bytes]:
+        try:
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as e:
+            print(f"Error fetching protobuf {url}: {e}")
+            return None
+
+    def check_api_health(self) -> dict:
+        status = {"irail": False, "gtfs_rt": False, "timestamp": datetime.now()}
+        try:
+            resp = requests.get(
+                IRAIL_STATIONS_URL, headers=self.headers, timeout=5
+            )
+            status["irail"] = resp.status_code == 200
+        except Exception:
+            pass
+        try:
+            resp = requests.head(GTFS_RT_VEHICLE_POSITIONS_URL, timeout=5)
+            status["gtfs_rt"] = resp.status_code == 200
+        except Exception:
+            pass
+        return status
 
     def get_stations(self) -> pd.DataFrame:
         if self._stations_cache is not None:
             return self._stations_cache
-        data = self._get(IRAIR_STATIONS_URL)
+        data = self._get(IRAIL_STATIONS_URL)
         if data is None or "station" not in data:
             return pd.DataFrame()
         stations = (
@@ -65,7 +115,7 @@ class RealtimeAPI:
             params["date"] = date
         if time:
             params["time"] = time
-        data = self._get(IRAIR_LIVEBOARD_URL, params)
+        data = self._get(IRAIL_LIVEBOARD_URL, params)
         if data is None:
             return pd.DataFrame()
         departures = data.get("departures", {})
@@ -106,6 +156,30 @@ class RealtimeAPI:
             df["delay_min"] = df["delay"] / 60
         return df
 
+    def get_liveboards_parallel(
+        self, stations: list, arrdep: str = "departure"
+    ) -> pd.DataFrame:
+        all_dfs = []
+
+        def _fetch_one(station):
+            return self.get_liveboard(station=station, arrdep=arrdep)
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {
+                executor.submit(_fetch_one, s): s for s in stations
+            }
+            for future in as_completed(futures):
+                try:
+                    df = future.result()
+                    if not df.empty:
+                        all_dfs.append(df)
+                except Exception:
+                    continue
+
+        if not all_dfs:
+            return pd.DataFrame()
+        return pd.concat(all_dfs, ignore_index=True)
+
     def get_connections(
         self,
         from_station: str = "Gent-Sint-Pieters",
@@ -124,7 +198,7 @@ class RealtimeAPI:
             params["date"] = date
         if time:
             params["time"] = time
-        data = self._get(IRAIR_CONNECTIONS_URL, params)
+        data = self._get(IRAIL_CONNECTIONS_URL, params)
         if data is None:
             return pd.DataFrame()
         connections = data.get("connection", [])
@@ -171,7 +245,7 @@ class RealtimeAPI:
         }
         if date:
             params["date"] = date
-        data = self._get(IRAIR_VEHICLE_URL, params)
+        data = self._get(IRAIL_VEHICLE_URL, params)
         if data is None:
             return pd.DataFrame()
         stops = data.get("stops", {})
@@ -210,7 +284,7 @@ class RealtimeAPI:
         return df
 
     def get_disturbances(self) -> pd.DataFrame:
-        data = self._get(IRAIR_DISTURBANCES_URL)
+        data = self._get(IRAIL_DISTURBANCES_URL)
         if data is None:
             return pd.DataFrame()
         disturbances = data.get("disturbance", [])
@@ -232,10 +306,60 @@ class RealtimeAPI:
         return pd.DataFrame(records)
 
     def trip_updates_to_df(self) -> pd.DataFrame:
-        return pd.DataFrame()
+        if not HAS_GTFS_RT:
+            return pd.DataFrame()
+        raw = self._get_protobuf(GTFS_RT_TRIP_UPDATES_URL)
+        if raw is None:
+            return pd.DataFrame()
+        feed = gtfs_realtime_pb2.FeedMessage()
+        feed.ParseFromString(raw)
+        records = []
+        for entity in feed.entity:
+            if not entity.HasField("trip_update"):
+                continue
+            tu = entity.trip_update
+            trip_id = tu.trip.trip_id
+            route_id = tu.trip.route_id
+            for stu in tu.stop_time_update:
+                records.append(
+                    {
+                        "trip_id": trip_id,
+                        "route_id": route_id,
+                        "stop_id": stu.stop_id,
+                        "stop_sequence": stu.stop_sequence,
+                        "arrival_delay": stu.arrival.delay / 60 if stu.HasField("arrival") else 0,
+                        "departure_delay": stu.departure.delay / 60 if stu.HasField("departure") else 0,
+                    }
+                )
+        return pd.DataFrame(records)
 
     def vehicle_positions_to_df(self) -> pd.DataFrame:
-        return pd.DataFrame()
+        if not HAS_GTFS_RT:
+            return pd.DataFrame()
+        raw = self._get_protobuf(GTFS_RT_VEHICLE_POSITIONS_URL)
+        if raw is None:
+            return pd.DataFrame()
+        feed = gtfs_realtime_pb2.FeedMessage()
+        feed.ParseFromString(raw)
+        records = []
+        for entity in feed.entity:
+            if not entity.HasField("vehicle"):
+                continue
+            vp = entity.vehicle
+            records.append(
+                {
+                    "trip_id": vp.trip.trip_id,
+                    "route_id": vp.trip.route_id,
+                    "latitude": vp.position.latitude,
+                    "longitude": vp.position.longitude,
+                    "bearing": vp.position.bearing,
+                    "speed": vp.position.speed if vp.position.speed else 0,
+                    "stop_id": vp.stop_id,
+                    "current_status": vp.current_status,
+                    "timestamp": datetime.fromtimestamp(vp.timestamp) if vp.timestamp else None,
+                }
+            )
+        return pd.DataFrame(records)
 
     def alerts_to_df(self) -> pd.DataFrame:
         return self.get_disturbances()

@@ -10,6 +10,7 @@ streamlit>=1.30
 # API & Data
 requests>=2.31
 gtfs-realtime-bindings>=1.0
+protobuf>=4.0
 
 # Geo
 geopandas>=0.14
