@@ -122,6 +122,8 @@ def fetch_live_data(api_instance):
         "platform": combined.get("platform", ""),
         "canceled": combined.get("canceled", 0),
         "scheduled_datetime": combined.get("scheduled_datetime", pd.NaT),
+        "station_lat": combined.get("station_lat"),
+        "station_lon": combined.get("station_lon"),
     })
     trip_updates = trip_updates.dropna(subset=["arrival_delay"])
     now = datetime.now()
@@ -132,19 +134,23 @@ def fetch_live_data(api_instance):
     trip_updates["is_canceled"] = trip_updates["canceled"].astype(str).isin(["1", "True"])
     trip_updates["delay_min"] = trip_updates["arrival_delay"]
 
-    stations_df = api_instance.get_stations()
-    positions = _build_positions(trip_updates, stations_df)
+    positions = _build_positions(trip_updates)
     disturbances = api_instance.get_disturbances()
 
     return trip_updates, positions, disturbances
 
 
-def _build_positions(trip_updates, stations_df):
-    """Map trains to real station coordinates with jitter to avoid overlap."""
-    if stations_df.empty or trip_updates.empty:
+def _build_positions(trip_updates):
+    """Map trains to real station coordinates (from liveboard API) with jitter."""
+    if trip_updates.empty:
+        return pd.DataFrame()
+    if "station_lat" not in trip_updates.columns or "station_lon" not in trip_updates.columns:
         return pd.DataFrame()
 
-    station_coords = stations_df.set_index("name")[["locationX", "locationY"]]
+    # Drop rows without coordinates
+    trip_updates = trip_updates.dropna(subset=["station_lat", "station_lon"])
+    if trip_updates.empty:
+        return pd.DataFrame()
 
     # Count trains per station for jitter spread
     station_counts = trip_updates.groupby("stop_id").cumcount()
@@ -152,10 +158,8 @@ def _build_positions(trip_updates, stations_df):
     positions = []
     for idx, (_, row) in enumerate(trip_updates.iterrows()):
         station = row["stop_id"]
-        if station not in station_coords.index:
-            continue
-        lon = float(station_coords.loc[station, "locationX"])
-        lat = float(station_coords.loc[station, "locationY"])
+        lat = float(row["station_lat"])
+        lon = float(row["station_lon"])
 
         # Jitter: tiny fixed spread so overlapping points are slightly visible
         count_at_station = station_counts.iloc[idx]
