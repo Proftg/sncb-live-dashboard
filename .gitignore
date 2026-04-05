@@ -25,3 +25,10 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Claude Code worktrees & memory
+.claude/
+
+# Notebook exports (generated at runtime)
+notebooks/data/clean/*.csv
+notebooks/data/raw/*.csv
