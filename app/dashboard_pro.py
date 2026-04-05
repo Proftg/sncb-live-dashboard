@@ -217,7 +217,7 @@ def create_kpi_gauge(value, title, subtitle, color, max_val=100):
             "threshold": {"line": {"color": color, "width": 4}, "thickness": 0.75, "value": value},
         },
     ))
-    fig.update_layout(height=200, margin={"l": 20, "r": 20, "t": 30, "b": 10}, **CHART_LAYOUT)
+    fig.update_layout(height=220, margin={"l": 20, "r": 20, "t": 50, "b": 10}, **CHART_LAYOUT)
     return fig
 
 
