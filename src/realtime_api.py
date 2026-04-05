@@ -122,10 +122,17 @@ class RealtimeAPI:
             dep_list = []
         if not dep_list:
             return pd.DataFrame()
+        # Top-level stationinfo contains departure station coordinates directly
+        top_stationinfo = data.get("stationinfo", {})
+        station_lat = pd.to_numeric(top_stationinfo.get("locationY"), errors="coerce")
+        station_lon = pd.to_numeric(top_stationinfo.get("locationX"), errors="coerce")
+
         records = []
         for dep in dep_list:
             record = {
                 "station": data.get("station", station),
+                "station_lat": station_lat,
+                "station_lon": station_lon,
                 "vehicle": dep.get("vehicle", ""),
                 "time": dep.get("time"),
                 "delay": dep.get("delay", 0),
