@@ -1,6 +1,6 @@
 # 🚄 Dashboard Ponctualité Live — SNCB/NMBS
 
-Dashboard interactif en temps réel de la ponctualité ferroviaire belge, combinant données horaires statiques (GTFS) et flux temps réel (GTFS-RT).
+Dashboard interactif en temps réel de la ponctualité ferroviaire belge, combinant des données horaires statiques (GTFS) et flux temps réel (GTFS-RT).
 
 **Objectif :** Démontrer la capacité à travailler avec des APIs temps réel, traiter des données géospatiales, et créer des visualisations actionnables pour les décideurs.
 
