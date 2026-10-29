@@ -1,28 +1,28 @@
-# 🚄 Dashboard Ponctualité Live — SNCB/NMBS
+# Dashboard Ponctualité Live, SNCB/NMBS
 
 Dashboard interactif en temps réel de la ponctualité ferroviaire belge, combinant des données horaires statiques (GTFS) et flux temps réel (GTFS-RT).
 
 **Objectif :** Démontrer la capacité à travailler avec des APIs temps réel, traiter des données géospatiales, et créer des visualisations actionnables pour les décideurs.
 
-## 🎯 Pour ce projet impressionne les recruteurs SNCB/Infrabel
+## Pour ce projet impressionne les recruteurs SNCB/Infrabel
 
-- ✅ **API temps réel** — pas juste des CSV statiques
-- ✅ **GTFS** — standard mondial du transport public
-- ✅ **Données géospatiales** — cartes interactives
-- ✅ **Pipeline complet** — ingestion → nettoyage → visualisation → déploiement
-- ✅ **Pertinence métier** — ponctualité = KPI #1 d'Infrabel
+- **API temps réel** — pas juste des CSV statiques
+- **GTFS** — standard mondial du transport public
+- **Données géospatiales** — cartes interactives
+- **Pipeline complet** — ingestion → nettoyage → visualisation → déploiement
+- **Pertinence métier** — ponctualité = KPI #1 d'Infrabel
 
-## 📊 Fonctionnalités
+## Fonctionnalités
 
 | Feature | Description |
 |---------|-------------|
-| 🗺️ Carte live | Positions des trains en temps réel sur carte Folium |
-| 📈 KPI Ponctualité | % trains à l'heure, retard moyen, tendance |
-| 🚨 Alertes | Trains avec retard > 15 min mis en évidence |
-| 📊 Comparaison | Ponctualité par type (IC, L, S, P) |
-| 🔮 Prédiction | Probabilité de retard basée sur historique |
+| Carte live | Positions des trains en temps réel sur carte Folium |
+| KPI Ponctualité | % trains à l'heure, retard moyen, tendance |
+| Alertes | Trains avec retard > 15 min mis en évidence |
+| Comparaison | Ponctualité par type (IC, L, S, P) |
+|  Prédiction | Probabilité de retard basée sur historique |
 
-## 🛠️ Stack
+##  Stack
 
 | Outil | Usage |
 |-------|-------|
@@ -34,7 +34,7 @@ Dashboard interactif en temps réel de la ponctualité ferroviaire belge, combin
 | Requests | API calls |
 | GTFS-Realtime | Protocol Buffers SNCB |
 
-## 📁 Structure
+##  Structure
 
 ```
 sncb-live-dashboard/
@@ -60,7 +60,7 @@ sncb-live-dashboard/
 └── README.md
 ```
 
-## 🚀 Lancement
+##  Lancement
 
 ```bash
 # Installer les dépendances
@@ -76,7 +76,7 @@ jupyter notebook notebooks/02_api_temps_reel.ipynb
 streamlit run app/dashboard.py
 ```
 
-## 📖 Sources de données
+##  Sources de données
 
 | Source | URL | Type |
 |--------|-----|------|
@@ -85,7 +85,7 @@ streamlit run app/dashboard.py
 | SNCB GTFS Real-time | API Belgian Mobility | Protocol Buffers 30s |
 | Infrabel Open Data | https://opendata.infrabel.be | Ponctualité mensuelle |
 
-## 📅 Roadmap
+##  Roadmap
 
 - [ ] Étape 1 : Exploration données GTFS statiques
 - [ ] Étape 2 : Connexion API temps réel SNCB
@@ -94,13 +94,6 @@ streamlit run app/dashboard.py
 - [ ] Étape 5 : Dashboard Streamlit complet
 - [ ] Étape 6 : Déploiement + documentation
 
-## 👤 Auteur
 
-**Tahar Guenfoud** — Data Analyst & Data Scientist
-- 🌐 [Portfolio](https://proftg.github.io/portfolio)
-- 💼 [LinkedIn](https://linkedin.com/in/tahar-guenfoud)
-- 📧 taharguenfoud@gmail.com
-
----
 
 *Projet portfolio — Candidature ICT Traineeship Infrabel*
